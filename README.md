@@ -6,7 +6,7 @@ This project is an AutoHotkey v2 script designed to automate the process of reje
 - **Automatic Detection:** Monitors the Street Fighter 6 matchmaking screen for incoming matches.
 - **Network Type Check:** Uses pixel color detection to determine if the opponent is on Ethernet or WiFi.
 - **Auto-Confirm/Reject:** Automatically confirms matches with Ethernet players and rejects those with WiFi players.
-- **Controller Support:** Allows launching the game or activating the game window using controller buttons.
+- **Controller Support:** Allows launching the game or activating the game window using controller buttons(Start & Back).
 - **Resolution Scaling:** Supports different window sizes and aspect ratios by dynamically scaling pixel search regions.
 - **Admin Privileges:** Automatically restarts the script with administrator rights if not already running as admin.
 

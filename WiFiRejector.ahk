@@ -4,55 +4,46 @@ KeyHistory 0
 Persistent
 CoordMode "Pixel", "Client"
 
-; Configuration object containing game parameters, UI regions, and control settings
-global config := {
-    ProcessName: "StreetFighter6.exe",  ; Target game executable
-    ReferenceResolution: [1920, 1080],   ; Base resolution for pixel coordinate scaling
-    Tolerance: 4,                        ; Color matching tolerance (0-255)
-    ConfirmationDelay: 1500,             ; Delay before confirming match (ms)
-    MainTimerInterval: 1000,             ; Main loop interval (ms)
-    WindowUpdateInterval: 60,            ; Window dimension update frequency
-    Regions: {
-        Queue: {           ; Pixel region for queue status indicator
-            X1: 810, Y1: 942,
-            X2: 813, Y2: 945,
-            TargetColor: 0xE62A2E
-        },
-        Confirm: {         ; Pixel region for match confirmation button
-            X1: 999, Y1: 903,
-            X2: 1002, Y2: 906,
-            TargetColor: 0xD04769
-        }
+; Global configuration for game automation
+global Config := {
+    ConfirmDelay: 1500,       ; Delay before auto-confirming match (ms)
+    MainInterval: 1000,       ; Main loop interval (ms)
+    WinUpdateInterval: 60,    ; Window size update interval (loop counts)
+    RefRes: [1920, 1080],     ; Reference resolution (base for scaling)
+    GameWinTitle: "StreetFighter6.exe",  ; Target game process
+    Region: {                 ; Color detection area for match status
+        X1: 810, Y1: 942, X2: 813, Y2: 945,
+        QueueColor: 0xE62A2E, ; Color for "in queue" state
+        ConfirmColor: 0x36074F, ; Color for "need confirm" state
+        Tolerance: 4          ; Color matching tolerance
     },
-    Network: {        ; Network type detection pixels
-        EthernetPixel: [939, 528],   ; Coordinate for Ethernet icon
-        WifiPixel: [939, 501],       ; Coordinate for WiFi icon
-        BackgroundColor: 0x111111    ; Background color
+    Network: {                ; Network status detection positions
+        EthPx: [939, 528],    ; Wired network icon position
+        WifiPx: [939, 501],   ; Wifi network icon position
+        BgColor: 0x111111     ; Background color of network area
     },
-    Controller: {     ; Game controller button mappings
-        LaunchGameButton: "Joy8",     ; Button to launch game
-        ActivateWindowButton: "Joy7", ; Button to focus game window
-        MaxScanNumber: 16             ; Max controllers to scan
+    Controller: {             ; Gamepad button settings
+        LaunchBtn: "Joy8",    ; Button to launch game
+        ActivateBtn: "Joy7",  ; Button to activate game window
+        MaxScan: 16           ; Max gamepad devices to scan
     }
 }
 
-; Game state tracking variables
-global gameState := {
-    ConfirmationTimer: 0,   ; Timestamp for confirmation delay
-    WindowWidth: 0,         ; Current game window width
-    WindowHeight: 0,        ; Current game window height
-    BorderHeight: 0,        ; Top/bottom border height for aspect ratio
-    IsInQueue: false,       ; Match queue status
-    IsGameRunning: false,   ; Game process status
-    IsFirstLaunch: true,    ; First execution flag
-    ControllerNumber: 0     ; Detected controller number
+; Runtime state tracking
+global State := {
+    ConfirmTimer: 0,          ; Auto-confirm countdown timer
+    ClientW: 0, ClientH: 0,   ; Game window client size
+    BorderH: 0,               ; Black border height (aspect ratio fix)
+    IsInQueue: false,         ; Whether in match queue
+    IsRunning: false,         ; Whether game is running
+    IsFirstRun: true,         ; First loop flag
+    ControllerNum: 0          ; Detected gamepad number
 }
 
-; Resolution scaling factors for different window sizes
-global scale := { X: 1.0, Y: 1.0 }
-global timerCounter := 0
+global Scale := { X: 1.0, Y: 1.0 }  ; Resolution scaling factors
+global Counter := 0                 ; Loop counter for window updates
 
-; Restart with administrator privileges if not already running as admin
+; Admin privilege check - restart with admin if missing
 if !(A_IsAdmin || RegExMatch(DllCall("GetCommandLine", "str"), " /restart(?!\S)")) {
     try {
         if A_IsCompiled {
@@ -64,169 +55,138 @@ if !(A_IsAdmin || RegExMatch(DllCall("GetCommandLine", "str"), " /restart(?!\S)"
     ExitApp
 }
 
-; Enable DPI awareness for accurate pixel coordinates on high-DPI displays
-DllCall("SetThreadDpiAwarenessContext", "ptr", -3, "ptr")
+DllCall("SetThreadDpiAwarenessContext", "ptr", -3, "ptr")  ; High-DPI compatibility
 
-; Start timer loops
-SetTimer(ControllerInputHandler, 100)
-SetTimer(MainLoop, config.MainTimerInterval)
+SetTimer(HandleControllerInput, 100)     ; Gamepad input handler
+SetTimer(MainLoop, Config.MainInterval)  ; Main automation loop
 
-; Main detection loop - runs every MainTimerInterval milliseconds
+; Main loop - core game state handling
 MainLoop() {
-    global config, gameState, timerCounter, scale
+    global Config, State, Counter, Scale
+    Counter++
 
-    timerCounter++
-
-    ; Check if game is still running
-    if !WinExist("ahk_exe " . config.ProcessName) {
-        gameState.IsGameRunning := false
+    ; Check if game window exists
+    if !WinExist("ahk_exe " . Config.GameWinTitle) {
+        State.IsRunning := false
         return
     }
 
-    ; Periodically update window dimensions
-    if (gameState.IsFirstLaunch || Mod(timerCounter, config.WindowUpdateInterval) = 0) {
-        UpdateGameWindowDimensions()
+    ; Update window size periodically
+    if (State.IsFirstRun || Mod(Counter, Config.WinUpdateInterval) = 0) {
+        UpdateClientSize()
     }
 
-    ; Update scaling if window size changed
-    currentWindow := GetGameWindowDimensions()
-    if (!gameState.IsGameRunning ||
-        gameState.WindowWidth != currentWindow.Width ||
-        gameState.WindowHeight != currentWindow.Height) {
-        UpdateResolutionScaling()
-        gameState.IsGameRunning := true
+    ; Recalculate scale if window size changed
+    currentWin := GetClientSize()
+    if (!State.IsRunning || State.ClientW != currentWin.W || State.ClientH != currentWin.H) {
+        CalcScale()
+        State.IsRunning := true
     }
 
-    ; Detect match state when game window is active
-    if WinActive("ahk_exe " . config.ProcessName) {
-        DetectMatchState()
+    ; Process matchmaking logic if game is active
+    if WinActive("ahk_exe " . Config.GameWinTitle) {
+        HandleMachmaking()
     }
 }
 
-; Get current game window dimensions
-GetGameWindowDimensions() {
-    WinGetClientPos(, , &width, &height, "ahk_exe " . config.ProcessName)
-    return { Width: width, Height: height }
+; Get game window client size (excludes borders)
+GetClientSize() {
+    WinGetClientPos(, , &w, &h, "ahk_exe " . Config.GameWinTitle)
+    return { W: w, H: h }
 }
 
-; Update stored window dimensions
-UpdateGameWindowDimensions() {
-    global gameState
-    windowSize := GetGameWindowDimensions()
-    gameState.WindowWidth := windowSize.Width
-    gameState.WindowHeight := windowSize.Height
-    gameState.IsFirstLaunch := false
+; Update window size in state
+UpdateClientSize() {
+    global State
+    winSize := GetClientSize()
+    State.ClientW := winSize.W
+    State.ClientH := winSize.H
+    State.IsFirstRun := false
 }
 
-; Calculate scaling factors and border height for resolution adaptation
-UpdateResolutionScaling() {
-    global config, gameState, scale
-    refWidth := config.ReferenceResolution[1], refHeight := config.ReferenceResolution[2]
-    currWidth := gameState.WindowWidth, currHeight := gameState.WindowHeight
+; Calculate resolution scaling for different window sizes
+CalcScale() {
+    global Config, State, Scale
+    refW := Config.RefRes[1], refH := Config.RefRes[2]
+    currW := State.ClientW, currH := State.ClientH
 
-    static lastWidth := 0, lastHeight := 0
-    if (currWidth = lastWidth && currHeight = lastHeight)
+    static lastW := 0, lastH := 0
+    if (currW = lastW && currH = lastH)
         return
+    lastW := currW, lastH := currH
 
-    lastWidth := currWidth
-    lastHeight := currHeight
-    scale.X := currWidth / refWidth
-
-    effectiveGameHeight := (refHeight / refWidth) * currWidth
-    gameState.BorderHeight := (currHeight - effectiveGameHeight) / 2
-    scale.Y := effectiveGameHeight / refHeight
+    Scale.X := currW / refW
+    effectiveH := (refH / refW) * currW  ; Maintain 16:9 aspect ratio
+    State.BorderH := (currH - effectiveH) / 2  ; Calculate black border
+    Scale.Y := effectiveH / refH
 }
 
-; Search for target color in a scaled region and return the found color
-SearchPixelInRegion(region) {
-    global scale, gameState, config
+; Search for target color in scaled region
+SearchColor(Color, Region) {
+    global Scale, State
+    x1 := Region.X1 * Scale.X
+    y1 := Region.Y1 * Scale.Y + State.BorderH
+    x2 := Region.X2 * Scale.X
+    y2 := Region.Y2 * Scale.Y + State.BorderH
 
-    ; Scale region coordinates to match current window size and aspect ratio
-    x1 := region.X1 * scale.X
-    y1 := region.Y1 * scale.Y + gameState.BorderHeight
-    x2 := region.X2 * scale.X
-    y2 := region.Y2 * scale.Y + gameState.BorderHeight
-
-    ; Search for target color in region
-    if PixelSearch(&matchX, &matchY, x1, y1, x2, y2, region.TargetColor, config.Tolerance) {
+    if PixelSearch(&matchX, &matchY, x1, y1, x2, y2, Color, Region.Tolerance) {
         return PixelGetColor(matchX, matchY)
     }
     return 0
 }
 
 ; Check if two colors match within tolerance
-ColorsMatch(color1, color2, tolerance) {
-    r1 := (color1 >> 16) & 0xFF, g1 := (color1 >> 8) & 0xFF, b1 := color1 & 0xFF
-    r2 := (color2 >> 16) & 0xFF, g2 := (color2 >> 8) & 0xFF, b2 := color2 & 0xFF
-
-    return (Abs(r1 - r2) <= tolerance &&
-        Abs(g1 - g2) <= tolerance &&
-        Abs(b1 - b2) <= tolerance)
+ColorsMatch(Color1, Color2, Tolerance) {
+    r1 := (Color1 >> 16) & 0xFF, g1 := (Color1 >> 8) & 0xFF, b1 := Color1 & 0xFF
+    r2 := (Color2 >> 16) & 0xFF, g2 := (Color2 >> 8) & 0xFF, b2 := Color2 & 0xFF
+    return (Abs(r1 - r2) <= Tolerance && Abs(g1 - g2) <= Tolerance && Abs(b1 - b2) <= Tolerance)
 }
 
-; Detect if player is in queue or match confirmation screen
-DetectMatchState() {
-    global config, gameState
+; Handle matchmaking state detection and auto-confirm
+HandleMachmaking() {
+    global Config, State
+    currQueueColor := SearchColor(Config.Region.QueueColor, Config.Region)
+    currConfirmColor := SearchColor(Config.Region.ConfirmColor, Config.Region)
 
-    ; Search for queue and confirm indicators
-    queueColor := SearchPixelInRegion(config.Regions.Queue)
-    confirmColor := SearchPixelInRegion(config.Regions.Confirm)
+    isQueue := ColorsMatch(currQueueColor, Config.Region.QueueColor, Config.Region.Tolerance)
+    isConfirm := ColorsMatch(currConfirmColor, Config.Region.ConfirmColor, Config.Region.Tolerance)
 
-    ; Check if colors match target values
-    gameState.IsInQueue := ColorsMatch(queueColor, config.Regions.Queue.TargetColor, config.Tolerance)
-        || ColorsMatch(confirmColor, config.Regions.Confirm.TargetColor, config.Tolerance)
+    State.IsInQueue := isQueue || isConfirm
 
-    ; Handle confirmation if in queue
-    if (gameState.IsInQueue) {
-        HandleMatchConfirmation(queueColor, confirmColor)
+    ; Trigger auto-confirm if needed
+    if (State.IsInQueue) {
+        needConfirm := !isQueue && isConfirm
+        if (needConfirm) {
+            if (State.ConfirmTimer = 0) {
+                State.ConfirmTimer := A_TickCount
+            }
+            if (A_TickCount - State.ConfirmTimer >= Config.ConfirmDelay) {
+                ExecuteConfirm()
+                State.ConfirmTimer := 0
+            }
+        } else {
+            State.ConfirmTimer := 0
+        }
     }
 }
 
-; Handle match confirmation with delay
-HandleMatchConfirmation(queueColor, confirmColor) {
-    global config, gameState, scale
-
-    ; Check if match confirmation screen is active
-    needConfirmation := !ColorsMatch(queueColor, config.Regions.Queue.TargetColor, config.Tolerance)
-        && ColorsMatch(confirmColor, config.Regions.Confirm.TargetColor, config.Tolerance)
-
-    if (needConfirmation) {
-        ; Start timer on first detection
-        if (gameState.ConfirmationTimer = 0) {
-            gameState.ConfirmationTimer := A_TickCount
-        }
-
-        ; Execute actions after delay to ensure detection is stable
-        if (A_TickCount - gameState.ConfirmationTimer >= config.ConfirmationDelay) {
-            ExecuteConfirmationActions()
-            gameState.ConfirmationTimer := 0
-        }
-    } else {
-        gameState.ConfirmationTimer := 0
-    }
-}
-
-; Execute match confirmation or rejection based on opponent's network type
-ExecuteConfirmationActions() {
-    global config, scale, gameState
-
-    ; Press Tab to open network info
-    SendKey("Tab")
-
+; Execute match confirmation keystrokes
+ExecuteConfirm() {
+    global Config, Scale, State
+    SendKey("Tab")  ; Focus confirm button
     Sleep 500
 
-    ; Get scaled coordinates for network icons
-    ethX := config.Network.EthernetPixel[1] * scale.X
-    ethY := config.Network.EthernetPixel[2] * scale.Y + gameState.BorderHeight
-    wifiX := config.Network.WifiPixel[1] * scale.X
-    wifiY := config.Network.WifiPixel[2] * scale.Y + gameState.BorderHeight
+    ; Check network type (wired/wifi)
+    ethX := Config.Network.EthPx[1] * Scale.X
+    ethY := Config.Network.EthPx[2] * Scale.Y + State.BorderH
+    wifiX := Config.Network.WifiPx[1] * Scale.X
+    wifiY := Config.Network.WifiPx[2] * Scale.Y + State.BorderH
 
-    ; Check network type
     ethColor := PixelGetColor(ethX, ethY)
     wifiColor := PixelGetColor(wifiX, wifiY)
-    bgColor := config.Network.BackgroundColor
+    bgColor := Config.Network.BgColor
 
-    ; Confirm if Ethernet, Reject if WiFi
+    ; Send confirm keys based on network
     if (ethColor != bgColor && wifiColor = bgColor) {
         SendKey("f")
     } else {
@@ -235,43 +195,41 @@ ExecuteConfirmationActions() {
     }
 }
 
-; Send a key with configurable delay
-SendKey(key, delay := 50) {
-    Send "{" key " Down}"
-    Sleep delay
-    Send "{" key " Up}"
-    Sleep delay
+; Simulate key press with delay
+SendKey(Key, Delay := 50) {
+    Send "{" Key " Down}"
+    Sleep Delay
+    Send "{" Key " Up}"
+    Sleep Delay
 }
 
-; Handle controller input for launching game or activating window
-ControllerInputHandler() {
-    global config, gameState
-
-    ; Detect connected controller
-    if (gameState.ControllerNumber <= 0) {
-        gameState.ControllerNumber := GetConnectedControllerNumber()
+; Handle gamepad input (launch/activate game)
+HandleControllerInput() {
+    global Config, State
+    ; Detect gamepad if not found
+    if (State.ControllerNum <= 0) {
+        State.ControllerNum := FindController()
         return
     }
 
-    ; Build button names with controller prefix
-    controllerPrefix := gameState.ControllerNumber
-    launchButton := controllerPrefix . config.Controller.LaunchGameButton
-    activateButton := controllerPrefix . config.Controller.ActivateWindowButton
+    prefix := State.ControllerNum
+    launchBtn := prefix . Config.Controller.LaunchBtn
+    activateBtn := prefix . Config.Controller.ActivateBtn
 
-    ; Launch game if not running and button pressed
-    if (!WinExist("ahk_exe " . config.ProcessName) && GetKeyState(launchButton)) {
-        Run "steam://rungameid/1364780"
+    ; Launch game via Steam if button pressed
+    if (!State.IsRunning && GetKeyState(launchBtn)) {
+        Run "steam://rungameid/1364780"  ; SF6 Steam AppID
     }
-    ; Focus window if running but not active and button pressed
-    else if (WinExist("ahk_exe " . config.ProcessName) && !WinActive("ahk_exe " . config.ProcessName) && GetKeyState(activateButton)) {
-        WinActivate("ahk_exe " . config.ProcessName)
+    ; Activate game window if button pressed
+    if (State.IsRunning && !WinActive("ahk_exe " . Config.GameWinTitle) && GetKeyState(activateBtn)) {
+        WinActivate("ahk_exe " . Config.GameWinTitle)
     }
 }
 
-; Detect connected controller number (1-16)
-GetConnectedControllerNumber() {
-    global config
-    loop config.Controller.MaxScanNumber {
+; Find connected gamepad device
+FindController() {
+    global Config
+    loop Config.Controller.MaxScan {
         if GetKeyState(A_Index "JoyName") {
             return A_Index
         }
